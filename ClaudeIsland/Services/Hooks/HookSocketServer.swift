@@ -4,6 +4,7 @@
 //
 //  Unix domain socket server for real-time hook events
 //  Supports request/response for permission decisions
+//  Also supports TCP socket for remote SSH sessions
 //
 
 import Foundation
@@ -11,6 +12,9 @@ import os.log
 
 /// Logger for hook socket server
 private let logger = Logger(subsystem: "com.claudeisland", category: "Hooks")
+
+/// Default TCP port for remote sessions
+let defaultRemoteSessionPort: UInt16 = 52945
 
 /// Event received from Claude Code hooks
 struct HookEvent: Codable, Sendable {
@@ -105,12 +109,21 @@ typealias PermissionFailureHandler = @Sendable (_ sessionId: String, _ toolUseId
 
 /// Unix domain socket server that receives events from Claude Code hooks
 /// Uses GCD DispatchSource for non-blocking I/O
+/// Also supports TCP socket for remote SSH sessions
 class HookSocketServer {
     static let shared = HookSocketServer()
     static let socketPath = "/tmp/claude-island.sock"
 
+    // Unix socket properties
     private var serverSocket: Int32 = -1
     private var acceptSource: DispatchSourceRead?
+
+    // TCP socket properties for remote sessions
+    private var tcpServerSocket: Int32 = -1
+    private var tcpAcceptSource: DispatchSourceRead?
+    private var tcpPort: UInt16 = defaultRemoteSessionPort
+    private(set) var isTcpServerRunning: Bool = false
+
     private var eventHandler: HookEventHandler?
     private var permissionFailureHandler: PermissionFailureHandler?
     private let queue = DispatchQueue(label: "com.claudeisland.socket", qos: .userInitiated)
@@ -204,12 +217,123 @@ class HookSocketServer {
         acceptSource = nil
         unlink(Self.socketPath)
 
+        stopTcpServer()
+
         permissionsLock.lock()
         for (_, pending) in pendingPermissions {
             close(pending.clientSocket)
         }
         pendingPermissions.removeAll()
         permissionsLock.unlock()
+    }
+
+    // MARK: - TCP Server for Remote Sessions
+
+    /// Start the TCP server for remote SSH sessions
+    func startTcpServer(port: UInt16 = defaultRemoteSessionPort) {
+        queue.async { [weak self] in
+            self?.startTcpServerInternal(port: port)
+        }
+    }
+
+    private func startTcpServerInternal(port: UInt16) {
+        guard tcpServerSocket < 0 else {
+            logger.info("TCP server already running on port \(self.tcpPort)")
+            return
+        }
+
+        tcpPort = port
+
+        tcpServerSocket = socket(AF_INET, SOCK_STREAM, 0)
+        guard tcpServerSocket >= 0 else {
+            logger.error("Failed to create TCP socket: \(errno)")
+            return
+        }
+
+        // Allow port reuse
+        var reuseAddr: Int32 = 1
+        setsockopt(tcpServerSocket, SOL_SOCKET, SO_REUSEADDR, &reuseAddr, socklen_t(MemoryLayout<Int32>.size))
+
+        // Set non-blocking
+        let flags = fcntl(tcpServerSocket, F_GETFL)
+        _ = fcntl(tcpServerSocket, F_SETFL, flags | O_NONBLOCK)
+
+        // Bind to all interfaces
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = port.bigEndian
+        addr.sin_addr.s_addr = INADDR_ANY
+
+        let bindResult = withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
+                bind(tcpServerSocket, sockaddrPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+
+        guard bindResult == 0 else {
+            logger.error("Failed to bind TCP socket to port \(port): \(errno)")
+            close(tcpServerSocket)
+            tcpServerSocket = -1
+            return
+        }
+
+        guard listen(tcpServerSocket, 10) == 0 else {
+            logger.error("Failed to listen on TCP socket: \(errno)")
+            close(tcpServerSocket)
+            tcpServerSocket = -1
+            return
+        }
+
+        isTcpServerRunning = true
+        logger.info("TCP server listening on port \(port, privacy: .public) for remote sessions")
+
+        tcpAcceptSource = DispatchSource.makeReadSource(fileDescriptor: tcpServerSocket, queue: queue)
+        tcpAcceptSource?.setEventHandler { [weak self] in
+            self?.acceptTcpConnection()
+        }
+        tcpAcceptSource?.setCancelHandler { [weak self] in
+            if let fd = self?.tcpServerSocket, fd >= 0 {
+                close(fd)
+                self?.tcpServerSocket = -1
+            }
+            self?.isTcpServerRunning = false
+        }
+        tcpAcceptSource?.resume()
+    }
+
+    /// Stop the TCP server
+    func stopTcpServer() {
+        tcpAcceptSource?.cancel()
+        tcpAcceptSource = nil
+        isTcpServerRunning = false
+    }
+
+    /// Get the current TCP port
+    var currentTcpPort: UInt16 {
+        return tcpPort
+    }
+
+    private func acceptTcpConnection() {
+        var clientAddr = sockaddr_in()
+        var addrLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+
+        let clientSocket = withUnsafeMutablePointer(to: &clientAddr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
+                accept(tcpServerSocket, sockaddrPtr, &addrLen)
+            }
+        }
+
+        guard clientSocket >= 0 else { return }
+
+        // Log the remote connection
+        let ipAddr = String(cString: inet_ntoa(clientAddr.sin_addr))
+        logger.info("Remote connection from \(ipAddr, privacy: .public)")
+
+        var nosigpipe: Int32 = 1
+        setsockopt(clientSocket, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, socklen_t(MemoryLayout<Int32>.size))
+
+        // Use the same handler as Unix socket
+        handleClient(clientSocket)
     }
 
     /// Respond to a pending permission request by toolUseId

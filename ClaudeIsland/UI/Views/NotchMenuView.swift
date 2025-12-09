@@ -17,8 +17,10 @@ import Sparkle
 struct NotchMenuView: View {
     @ObservedObject var viewModel: NotchViewModel
     @ObservedObject private var updateManager = UpdateManager.shared
+    @ObservedObject private var remoteSettings = RemoteSessionSettings.shared
     @State private var hooksInstalled: Bool = false
     @State private var launchAtLogin: Bool = false
+    @State private var showRemoteInfo: Bool = false
 
     var body: some View {
         VStack(spacing: 4) {
@@ -70,6 +72,13 @@ struct NotchMenuView: View {
                     print("Failed to toggle launch at login: \(error)")
                 }
             }
+
+            // Remote Sessions toggle
+            RemoteSessionRow(
+                isEnabled: $remoteSettings.isEnabled,
+                showInfo: $showRemoteInfo,
+                settings: remoteSettings
+            )
 
             Divider()
                 .background(Color.white.opacity(0.08))
@@ -515,5 +524,133 @@ struct MenuToggleRow: View {
 
     private var textColor: Color {
         .white.opacity(isHovered ? 1.0 : 0.7)
+    }
+}
+
+// MARK: - Remote Session Row
+
+struct RemoteSessionRow: View {
+    @Binding var isEnabled: Bool
+    @Binding var showInfo: Bool
+    let settings: RemoteSessionSettings
+
+    @State private var isHovered = false
+    @State private var copied = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Main toggle row
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isEnabled.toggle()
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "network")
+                        .font(.system(size: 12))
+                        .foregroundColor(textColor)
+                        .frame(width: 16)
+
+                    Text("Remote Sessions")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(textColor)
+
+                    Spacer()
+
+                    if isEnabled {
+                        // Info button
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showInfo.toggle()
+                            }
+                        } label: {
+                            Image(systemName: showInfo ? "info.circle.fill" : "info.circle")
+                                .font(.system(size: 12))
+                                .foregroundColor(.white.opacity(0.5))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    Circle()
+                        .fill(isEnabled ? TerminalColors.green : Color.white.opacity(0.3))
+                        .frame(width: 6, height: 6)
+
+                    Text(isEnabled ? "On" : "Off")
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.4))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(isHovered ? Color.white.opacity(0.08) : Color.clear)
+                )
+            }
+            .buttonStyle(.plain)
+            .onHover { isHovered = $0 }
+
+            // Expandable info section
+            if isEnabled && showInfo {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Port: \(settings.port)")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.6))
+
+                        Spacer()
+
+                        Button {
+                            copyConnectionInfo()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                                    .font(.system(size: 10))
+                                Text(copied ? "Copied!" : "Copy Setup")
+                                    .font(.system(size: 10, weight: .medium))
+                            }
+                            .foregroundColor(copied ? TerminalColors.green : .white.opacity(0.7))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(Color.white.opacity(0.1))
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    Text("On the remote machine, set:")
+                        .font(.system(size: 10))
+                        .foregroundColor(.white.opacity(0.4))
+
+                    Text(settings.getConnectionInstructions())
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.5))
+                        .padding(8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color.black.opacity(0.3))
+                        )
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+
+    private var textColor: Color {
+        .white.opacity(isHovered ? 1.0 : 0.7)
+    }
+
+    private func copyConnectionInfo() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(settings.getConnectionInstructions(), forType: .string)
+
+        copied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            copied = false
+        }
     }
 }

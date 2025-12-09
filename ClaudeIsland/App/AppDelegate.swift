@@ -8,10 +8,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowManager: WindowManager?
     private var screenObserver: ScreenObserver?
     private var updateCheckTimer: Timer?
+    private var remoteSessionSettingsObserver: NSObjectProtocol?
 
     static var shared: AppDelegate?
     let updater: SPUUpdater
     private let userDriver: NotchUserDriver
+    let remoteSettings = RemoteSessionSettings.shared
 
     var windowController: NotchWindowController? {
         windowManager?.windowController
@@ -68,6 +70,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         Mixpanel.mainInstance().flush()
 
         HookInstaller.installIfNeeded()
+        setupRemoteSessionServer()
         NSApplication.shared.setActivationPolicy(.accessory)
 
         windowManager = WindowManager()
@@ -95,6 +98,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         Mixpanel.mainInstance().flush()
         updateCheckTimer?.invalidate()
         screenObserver = nil
+        if let observer = remoteSessionSettingsObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    // MARK: - Remote Session Server
+
+    private func setupRemoteSessionServer() {
+        // Start TCP server if enabled
+        if remoteSettings.isEnabled {
+            HookSocketServer.shared.startTcpServer(port: remoteSettings.port)
+        }
+
+        // Observe settings changes
+        remoteSessionSettingsObserver = NotificationCenter.default.addObserver(
+            forName: RemoteSessionSettings.settingsChangedNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleRemoteSettingsChanged()
+        }
+    }
+
+    private func handleRemoteSettingsChanged() {
+        if remoteSettings.isEnabled {
+            // Start or restart with new port
+            HookSocketServer.shared.stopTcpServer()
+            HookSocketServer.shared.startTcpServer(port: remoteSettings.port)
+        } else {
+            HookSocketServer.shared.stopTcpServer()
+        }
     }
 
     private func getOrCreateDistinctId() -> String {
