@@ -23,94 +23,96 @@ struct NotchMenuView: View {
     @State private var showRemoteInfo: Bool = false
 
     var body: some View {
-        VStack(spacing: 4) {
-            // Back button
-            MenuRow(
-                icon: "chevron.left",
-                label: "Back"
-            ) {
-                viewModel.toggleMenu()
-            }
-
-            Divider()
-                .background(Color.white.opacity(0.08))
-                .padding(.vertical, 4)
-
-            // Accessibility permission row - check live every render
-            AccessibilityRow(isEnabled: AXIsProcessTrusted())
-
-            // Hooks toggle
-            MenuToggleRow(
-                icon: "arrow.triangle.2.circlepath",
-                label: "Hooks",
-                isOn: hooksInstalled
-            ) {
-                if hooksInstalled {
-                    HookInstaller.uninstall()
-                    hooksInstalled = false
-                } else {
-                    HookInstaller.installIfNeeded()
-                    hooksInstalled = true
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 4) {
+                // Back button
+                MenuRow(
+                    icon: "chevron.left",
+                    label: "Back"
+                ) {
+                    viewModel.toggleMenu()
                 }
-            }
 
-            // Launch at Login toggle
-            MenuToggleRow(
-                icon: "power",
-                label: "Launch at Login",
-                isOn: launchAtLogin
-            ) {
-                do {
-                    if launchAtLogin {
-                        try SMAppService.mainApp.unregister()
-                        launchAtLogin = false
+                Divider()
+                    .background(Color.white.opacity(0.08))
+                    .padding(.vertical, 4)
+
+                // Accessibility permission row
+                AccessibilityRow()
+
+                // Hooks toggle
+                MenuToggleRow(
+                    icon: "arrow.triangle.2.circlepath",
+                    label: "Hooks",
+                    isOn: hooksInstalled
+                ) {
+                    if hooksInstalled {
+                        HookInstaller.uninstall()
+                        hooksInstalled = false
                     } else {
-                        try SMAppService.mainApp.register()
-                        launchAtLogin = true
+                        HookInstaller.installIfNeeded()
+                        hooksInstalled = true
                     }
-                } catch {
-                    print("Failed to toggle launch at login: \(error)")
+                }
+
+                // Launch at Login toggle
+                MenuToggleRow(
+                    icon: "power",
+                    label: "Launch at Login",
+                    isOn: launchAtLogin
+                ) {
+                    do {
+                        if launchAtLogin {
+                            try SMAppService.mainApp.unregister()
+                            launchAtLogin = false
+                        } else {
+                            try SMAppService.mainApp.register()
+                            launchAtLogin = true
+                        }
+                    } catch {
+                        print("Failed to toggle launch at login: \(error)")
+                    }
+                }
+
+                // Remote Sessions toggle
+                RemoteSessionRow(
+                    isEnabled: $remoteSettings.isEnabled,
+                    showInfo: $showRemoteInfo,
+                    settings: remoteSettings
+                )
+
+                Divider()
+                    .background(Color.white.opacity(0.08))
+                    .padding(.vertical, 4)
+
+                // GitHub link
+                MenuRow(
+                    icon: "star",
+                    label: "Star on GitHub"
+                ) {
+                    if let url = URL(string: "https://github.com/farouqaldori/claude-island") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+
+                // Update row
+                UpdateRow(updateManager: updateManager)
+
+                Divider()
+                    .background(Color.white.opacity(0.08))
+                    .padding(.vertical, 4)
+
+                MenuRow(
+                    icon: "xmark.circle",
+                    label: "Quit",
+                    isDestructive: true
+                ) {
+                    NSApplication.shared.terminate(nil)
                 }
             }
-
-            // Remote Sessions toggle
-            RemoteSessionRow(
-                isEnabled: $remoteSettings.isEnabled,
-                showInfo: $showRemoteInfo,
-                settings: remoteSettings
-            )
-
-            Divider()
-                .background(Color.white.opacity(0.08))
-                .padding(.vertical, 4)
-
-            // GitHub link
-            MenuRow(
-                icon: "star",
-                label: "Star on GitHub"
-            ) {
-                if let url = URL(string: "https://github.com/farouqaldori/claude-island") {
-                    NSWorkspace.shared.open(url)
-                }
-            }
-
-            // Update row
-            UpdateRow(updateManager: updateManager)
-
-            Divider()
-                .background(Color.white.opacity(0.08))
-                .padding(.vertical, 4)
-
-            MenuRow(
-                icon: "xmark.circle",
-                label: "Quit",
-                isDestructive: true
-            ) {
-                NSApplication.shared.terminate(nil)
-            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear {
             refreshStates()
@@ -370,16 +372,8 @@ struct UpdateRow: View {
 // MARK: - Accessibility Permission Row
 
 struct AccessibilityRow: View {
-    let isEnabled: Bool
-
     @State private var isHovered = false
-    @State private var refreshTrigger = false
-
-    private var currentlyEnabled: Bool {
-        // Re-check on each render when refreshTrigger changes
-        _ = refreshTrigger
-        return isEnabled
-    }
+    @State private var isEnabled: Bool = AXIsProcessTrusted()
 
     var body: some View {
         HStack(spacing: 10) {
@@ -425,7 +419,10 @@ struct AccessibilityRow: View {
         )
         .onHover { isHovered = $0 }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            refreshTrigger.toggle()
+            isEnabled = AXIsProcessTrusted()
+        }
+        .onAppear {
+            isEnabled = AXIsProcessTrusted()
         }
     }
 
