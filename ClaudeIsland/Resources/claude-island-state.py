@@ -126,6 +126,10 @@ def main():
     if event == "UserPromptSubmit":
         # User just sent a message - Claude is now processing
         state["status"] = "processing"
+        # Include user message for remote sessions
+        user_message = data.get("message") or data.get("prompt") or data.get("user_prompt")
+        if user_message:
+            state["message"] = user_message
 
     elif event == "PreToolUse":
         state["status"] = "running_tool"
@@ -201,6 +205,10 @@ def main():
 
     elif event == "Stop":
         state["status"] = "waiting_for_input"
+        # Include stop reason/message if available
+        stop_reason = data.get("stop_reason") or data.get("message")
+        if stop_reason:
+            state["message"] = stop_reason
 
     elif event == "SubagentStop":
         # SubagentStop fires when a subagent completes - usually means back to waiting
