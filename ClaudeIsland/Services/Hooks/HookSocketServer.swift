@@ -16,6 +16,12 @@ private let logger = Logger(subsystem: "com.claudeisland", category: "Hooks")
 /// Default TCP port for remote sessions
 let defaultRemoteSessionPort: UInt16 = 52945
 
+/// Message from remote session conversation
+struct RemoteMessage: Codable, Sendable {
+    let role: String
+    let content: String
+}
+
 /// Event received from Claude Code hooks
 struct HookEvent: Codable, Sendable {
     let sessionId: String
@@ -29,6 +35,7 @@ struct HookEvent: Codable, Sendable {
     let toolUseId: String?
     let notificationType: String?
     let message: String?
+    let conversation: [RemoteMessage]?
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
@@ -36,11 +43,11 @@ struct HookEvent: Codable, Sendable {
         case toolInput = "tool_input"
         case toolUseId = "tool_use_id"
         case notificationType = "notification_type"
-        case message
+        case message, conversation
     }
 
     /// Create a copy with updated toolUseId
-    init(sessionId: String, cwd: String, event: String, status: String, pid: Int?, tty: String?, tool: String?, toolInput: [String: AnyCodable]?, toolUseId: String?, notificationType: String?, message: String?) {
+    init(sessionId: String, cwd: String, event: String, status: String, pid: Int?, tty: String?, tool: String?, toolInput: [String: AnyCodable]?, toolUseId: String?, notificationType: String?, message: String?, conversation: [RemoteMessage]? = nil) {
         self.sessionId = sessionId
         self.cwd = cwd
         self.event = event
@@ -52,6 +59,7 @@ struct HookEvent: Codable, Sendable {
         self.toolUseId = toolUseId
         self.notificationType = notificationType
         self.message = message
+        self.conversation = conversation
     }
 
     var sessionPhase: SessionPhase {
@@ -571,7 +579,8 @@ class HookSocketServer {
                 toolInput: event.toolInput,
                 toolUseId: toolUseId,  // Use resolved toolUseId
                 notificationType: event.notificationType,
-                message: event.message
+                message: event.message,
+                conversation: event.conversation
             )
 
             let pending = PendingPermission(

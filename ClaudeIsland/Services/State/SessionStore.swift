@@ -161,11 +161,57 @@ actor SessionStore {
             session.subagentState = SubagentState()
         }
 
+        // Process conversation from remote sessions
+        if let conversation = event.conversation, !conversation.isEmpty {
+            processRemoteConversation(conversation, session: &session)
+        }
+
         sessions[sessionId] = session
         publishState()
 
         if event.shouldSyncFile {
             scheduleFileSync(sessionId: sessionId, cwd: event.cwd)
+        }
+    }
+
+    /// Process conversation data from remote sessions (sent via hook)
+    private func processRemoteConversation(_ messages: [RemoteMessage], session: inout SessionState) {
+        // Build chat items from remote messages
+        var newItems: [ChatHistoryItem] = []
+
+        for (index, msg) in messages.enumerated() {
+            let itemId = "remote-\(session.sessionId)-\(index)"
+
+            // Check if we already have this message (by comparing content with existing items)
+            let alreadyExists = session.chatItems.contains { item in
+                switch item.type {
+                case .user(let text):
+                    return msg.role == "user" && text == msg.content
+                case .assistant(let text):
+                    return msg.role == "assistant" && text == msg.content
+                default:
+                    return false
+                }
+            }
+
+            if !alreadyExists {
+                let itemType: ChatHistoryItemType = msg.role == "user"
+                    ? .user(msg.content)
+                    : .assistant(msg.content)
+
+                newItems.append(ChatHistoryItem(
+                    id: itemId,
+                    type: itemType,
+                    timestamp: Date()
+                ))
+            }
+        }
+
+        // Only add new items that don't exist yet
+        if !newItems.isEmpty {
+            // Replace all remote items with new set to avoid duplicates
+            session.chatItems.removeAll { $0.id.hasPrefix("remote-") }
+            session.chatItems.append(contentsOf: newItems)
         }
     }
 

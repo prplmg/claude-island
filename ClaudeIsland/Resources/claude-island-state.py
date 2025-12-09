@@ -15,6 +15,7 @@ import json
 import os
 import socket
 import sys
+from pathlib import Path
 
 SOCKET_PATH = "/tmp/claude-island.sock"
 DEFAULT_TCP_PORT = 52945
@@ -28,6 +29,90 @@ def get_connection_config():
         port = int(os.environ.get("CLAUDE_ISLAND_PORT", DEFAULT_TCP_PORT))
         return ("tcp", remote_host, port)
     return ("unix", SOCKET_PATH, None)
+
+
+def is_remote_session():
+    """Check if this is a remote session"""
+    return os.environ.get("CLAUDE_ISLAND_HOST") is not None
+
+
+def get_jsonl_path(session_id, cwd):
+    """Get the path to the session's JSONL file"""
+    home = Path.home()
+    claude_dir = home / ".claude" / "projects"
+
+    # The project directory is based on the cwd, encoded
+    # Claude uses a hash or encoding of the path
+    if cwd:
+        # Try to find the project directory
+        cwd_encoded = cwd.replace("/", "-").strip("-")
+        # Also try just the last component
+        cwd_last = Path(cwd).name if cwd else ""
+
+        # Search for matching project directories
+        if claude_dir.exists():
+            for project_dir in claude_dir.iterdir():
+                if project_dir.is_dir():
+                    jsonl_file = project_dir / f"{session_id}.jsonl"
+                    if jsonl_file.exists():
+                        return jsonl_file
+
+    return None
+
+
+def parse_jsonl_messages(jsonl_path, limit=10):
+    """Parse the last N messages from a JSONL file"""
+    if not jsonl_path or not jsonl_path.exists():
+        return []
+
+    messages = []
+    try:
+        with open(jsonl_path, "r") as f:
+            lines = f.readlines()
+
+        for line in lines[-100:]:  # Check last 100 lines for messages
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+                msg_type = entry.get("type")
+
+                if msg_type == "user":
+                    # User message
+                    content = entry.get("message", {})
+                    if isinstance(content, dict):
+                        text = content.get("content", "")
+                    else:
+                        text = str(content)
+                    if text:
+                        messages.append({"role": "user", "content": text})
+
+                elif msg_type == "assistant":
+                    # Assistant message
+                    content = entry.get("message", {})
+                    if isinstance(content, dict):
+                        # Extract text from content blocks
+                        blocks = content.get("content", [])
+                        if isinstance(blocks, list):
+                            text_parts = []
+                            for block in blocks:
+                                if isinstance(block, dict) and block.get("type") == "text":
+                                    text_parts.append(block.get("text", ""))
+                            text = "\n".join(text_parts)
+                        else:
+                            text = str(blocks)
+                    else:
+                        text = str(content)
+                    if text:
+                        messages.append({"role": "assistant", "content": text})
+
+            except json.JSONDecodeError:
+                continue
+    except Exception:
+        pass
+
+    # Return last N messages
+    return messages[-limit:] if messages else []
 
 
 def get_tty():
@@ -227,6 +312,14 @@ def main():
 
     else:
         state["status"] = "unknown"
+
+    # For remote sessions, include conversation content on key events
+    if is_remote_session() and event in ("Stop", "UserPromptSubmit", "SessionStart", "Notification"):
+        jsonl_path = get_jsonl_path(session_id, cwd)
+        if jsonl_path:
+            messages = parse_jsonl_messages(jsonl_path, limit=20)
+            if messages:
+                state["conversation"] = messages
 
     # Send to socket (fire and forget for non-permission events)
     send_event(state)
