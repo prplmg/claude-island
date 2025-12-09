@@ -153,6 +153,7 @@ def get_tty():
 
 def send_event(state):
     """Send event to app, return response if any"""
+    sock = None
     try:
         conn_type, host_or_path, port = get_connection_config()
 
@@ -172,15 +173,18 @@ def send_event(state):
         # For permission requests, wait for response
         if state.get("status") == "waiting_for_approval":
             response = sock.recv(4096)
-            sock.close()
             if response:
                 return json.loads(response.decode())
-        else:
-            sock.close()
 
         return None
     except (socket.error, OSError, json.JSONDecodeError):
         return None
+    finally:
+        if sock:
+            try:
+                sock.close()
+            except Exception:
+                pass
 
 
 def main():
