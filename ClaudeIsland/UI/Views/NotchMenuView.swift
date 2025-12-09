@@ -36,8 +36,8 @@ struct NotchMenuView: View {
                 .background(Color.white.opacity(0.08))
                 .padding(.vertical, 4)
 
-            // Accessibility permission row - check live every render
-            AccessibilityRow(isEnabled: AXIsProcessTrusted())
+            // Accessibility permission row
+            AccessibilityRow()
 
             // Hooks toggle
             MenuToggleRow(
@@ -370,16 +370,8 @@ struct UpdateRow: View {
 // MARK: - Accessibility Permission Row
 
 struct AccessibilityRow: View {
-    let isEnabled: Bool
-
     @State private var isHovered = false
-    @State private var refreshTrigger = false
-
-    private var currentlyEnabled: Bool {
-        // Re-check on each render when refreshTrigger changes
-        _ = refreshTrigger
-        return isEnabled
-    }
+    @State private var isEnabled: Bool = AXIsProcessTrusted()
 
     var body: some View {
         HStack(spacing: 10) {
@@ -425,7 +417,10 @@ struct AccessibilityRow: View {
         )
         .onHover { isHovered = $0 }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            refreshTrigger.toggle()
+            isEnabled = AXIsProcessTrusted()
+        }
+        .onAppear {
+            isEnabled = AXIsProcessTrusted()
         }
     }
 
