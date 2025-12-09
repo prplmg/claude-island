@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """
 Claude Island Hook
-- Sends session state to ClaudeIsland.app via Unix socket
+- Sends session state to ClaudeIsland.app via Unix socket (local)
+- Or via TCP socket for remote SSH sessions
 - For PermissionRequest: waits for user decision from the app
+
+Remote session usage:
+  Set CLAUDE_ISLAND_HOST environment variable to your Mac's IP/hostname
+  Optionally set CLAUDE_ISLAND_PORT (default: 52945)
+
+  Example: export CLAUDE_ISLAND_HOST=192.168.1.100
 """
 import json
 import os
@@ -10,7 +17,17 @@ import socket
 import sys
 
 SOCKET_PATH = "/tmp/claude-island.sock"
+DEFAULT_TCP_PORT = 52945
 TIMEOUT_SECONDS = 300  # 5 minutes for permission decisions
+
+
+def get_connection_config():
+    """Determine whether to use Unix socket or TCP based on environment"""
+    remote_host = os.environ.get("CLAUDE_ISLAND_HOST")
+    if remote_host:
+        port = int(os.environ.get("CLAUDE_ISLAND_PORT", DEFAULT_TCP_PORT))
+        return ("tcp", remote_host, port)
+    return ("unix", SOCKET_PATH, None)
 
 
 def get_tty():
@@ -52,9 +69,19 @@ def get_tty():
 def send_event(state):
     """Send event to app, return response if any"""
     try:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(TIMEOUT_SECONDS)
-        sock.connect(SOCKET_PATH)
+        conn_type, host_or_path, port = get_connection_config()
+
+        if conn_type == "tcp":
+            # TCP socket for remote sessions
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(TIMEOUT_SECONDS)
+            sock.connect((host_or_path, port))
+        else:
+            # Unix socket for local sessions
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(TIMEOUT_SECONDS)
+            sock.connect(host_or_path)
+
         sock.sendall(json.dumps(state).encode())
 
         # For permission requests, wait for response
